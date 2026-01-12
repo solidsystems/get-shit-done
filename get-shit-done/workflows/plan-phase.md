@@ -54,6 +54,29 @@ Read `.planning/STATE.md` and parse:
 If STATE.md missing but .planning/ exists, offer to reconstruct or continue without.
 </step>
 
+<step name="query_memories">
+**Query cross-project memories for relevant patterns (if memory system installed):**
+
+```bash
+if [ -d "$HOME/.claude/memory" ]; then
+  # Query for phase-related patterns
+  $HOME/.claude/get-shit-done/integrations/memory-query.sh "[phase topic keywords]"
+fi
+```
+
+If relevant memories found:
+- Extract applicable patterns and preferences
+- Note any "don't do X" anti-patterns
+- Add relevant learnings to PLAN.md context section
+
+This surfaces cross-project knowledge like:
+- "Prefer domain-specific handler files"
+- "Use dependency injection for testability"
+- "No emojis in output"
+
+If no memories or memory system not installed, skip silently.
+</step>
+
 <step name="load_codebase_context">
 Check for codebase map:
 
