@@ -9,10 +9,14 @@
 #        ./scripts/gsd-phase-executor.sh --milestone v1.2
 #
 # Options:
-#   --dry-run       Show what would be executed without running
-#   --plan N        Run only plan N
-#   --continue      Continue from last completed plan
-#   --milestone M   Execute all phases in milestone M (e.g., v1.2)
+#   --dry-run           Show what would be executed without running
+#   --plan N            Run only plan N
+#   --continue          Continue from last completed plan
+#   --milestone M       Execute all phases in milestone M (e.g., v1.2)
+#   --branch-strategy S Branching strategy: independent (default), chain, or single
+#                       - independent: each phase branches from main (clean PRs)
+#                       - chain: each phase branches from previous (stacked PRs)
+#                       - single: all phases on one branch (single PR per milestone)
 #
 
 set -e
@@ -33,6 +37,7 @@ MILESTONE_MODE=0
 PLAN_NUMBER=""
 PHASE_INPUT=""
 MILESTONE_VERSION=""
+BRANCH_STRATEGY="independent"  # independent (default), chain, or single
 
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
@@ -48,10 +53,14 @@ Usage: $0 [options] <phase-number|phase-directory>
        $0 --milestone <version>
 
 Options:
-    --dry-run       Show what would be executed without running
-    --plan N        Run only plan N (single phase mode only)
-    --continue      Continue from last completed plan/phase
-    --milestone M   Execute all phases in milestone M (e.g., v1.1, v1.2)
+    --dry-run           Show what would be executed without running
+    --plan N            Run only plan N (single phase mode only)
+    --continue          Continue from last completed plan/phase
+    --milestone M       Execute all phases in milestone M (e.g., v1.1, v1.2)
+    --branch-strategy S Branching strategy (default: independent)
+                        - independent: each phase branches from main (clean PRs)
+                        - chain: each phase branches from previous (stacked PRs)
+                        - single: all phases on one branch (single PR per milestone)
 
 Examples:
     $0 11                                                    # Phase 11
@@ -62,6 +71,8 @@ Examples:
     $0 --milestone v1.2                                      # Run entire milestone
     $0 --milestone v1.2 --dry-run                            # Preview milestone
     $0 --milestone v1.2 --continue                           # Resume milestone
+    $0 --milestone v1.3 --branch-strategy chain              # Stacked PRs
+    $0 --milestone v1.3 --branch-strategy single             # Single PR
 EOF
     exit 1
 }
@@ -86,6 +97,15 @@ parse_args() {
             --milestone)
                 MILESTONE_MODE=1
                 MILESTONE_VERSION="$2"
+                shift 2
+                ;;
+            --branch-strategy)
+                BRANCH_STRATEGY="$2"
+                if [[ ! "$BRANCH_STRATEGY" =~ ^(independent|chain|single)$ ]]; then
+                    log_error "Invalid branch strategy: $BRANCH_STRATEGY"
+                    log_info "Valid options: independent, chain, single"
+                    exit 1
+                fi
                 shift 2
                 ;;
             --help|-h)
@@ -390,8 +410,14 @@ execute_plan() {
     local desc=$(echo "$objective" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//' | cut -c1-30)
     local branch_name="phase-${phase_num}/plan-${plan_num}-${desc}"
 
-    log_info "Branch: ${branch_name}"
-    log_info "Base: ${base_branch}"
+    # For 'single' strategy, stay on the milestone branch (base_branch)
+    if [ "$BRANCH_STRATEGY" = "single" ]; then
+        branch_name="$base_branch"
+        log_info "Branch: ${branch_name} (single strategy - using milestone branch)"
+    else
+        log_info "Branch: ${branch_name}"
+        log_info "Base: ${base_branch}"
+    fi
 
     # Export for caller to track
     LAST_BRANCH="$branch_name"
@@ -405,25 +431,33 @@ execute_plan() {
         return 0
     fi
 
-    # Checkout base branch and create new branch from it
-    if [ "$base_branch" = "main" ]; then
-        git fetch origin main 2>/dev/null || true
-        git checkout main 2>/dev/null || true
-        git pull origin main 2>/dev/null || true
-    else
-        # For non-main base, just checkout the branch (it should already exist locally)
+    # For 'single' strategy, just ensure we're on the milestone branch
+    if [ "$BRANCH_STRATEGY" = "single" ]; then
         git checkout "$base_branch" 2>/dev/null || {
-            log_error "Base branch ${base_branch} not found"
+            log_error "Milestone branch ${base_branch} not found"
             return 1
         }
-    fi
-
-    if git show-ref --verify --quiet "refs/heads/${branch_name}"; then
-        log_info "Branch exists, checking out..."
-        git checkout "$branch_name"
     else
-        log_info "Creating new branch from ${base_branch}..."
-        git checkout -b "$branch_name"
+        # Checkout base branch and create new branch from it
+        if [ "$base_branch" = "main" ]; then
+            git fetch origin main 2>/dev/null || true
+            git checkout main 2>/dev/null || true
+            git pull origin main 2>/dev/null || true
+        else
+            # For non-main base, just checkout the branch (it should already exist locally)
+            git checkout "$base_branch" 2>/dev/null || {
+                log_error "Base branch ${base_branch} not found"
+                return 1
+            }
+        fi
+
+        if git show-ref --verify --quiet "refs/heads/${branch_name}"; then
+            log_info "Branch exists, checking out..."
+            git checkout "$branch_name"
+        else
+            log_info "Creating new branch from ${base_branch}..."
+            git checkout -b "$branch_name"
+        fi
     fi
 
     # Build and execute prompt
@@ -435,6 +469,12 @@ execute_plan() {
     if claude -p "$prompt" --allowedTools "Bash,Read,Write,Edit,Glob,Grep" 2>&1 | tee "$output_file"; then
         if grep -q "PLAN_COMPLETE" "$output_file"; then
             log_success "Plan ${phase_num}-${plan_num} completed"
+
+            # Skip push/PR for 'single' strategy - handled at milestone level
+            if [ "$BRANCH_STRATEGY" = "single" ]; then
+                log_info "Commits added to milestone branch (PR created at milestone end)"
+                return 0
+            fi
 
             # Push and create PR
             log_info "Pushing to remote..."
@@ -456,6 +496,12 @@ execute_plan() {
             # Check for summary file as success indicator
             if has_summary "$plan_file"; then
                 log_success "Found SUMMARY.md - assuming success"
+
+                # Skip push/PR for 'single' strategy - handled at milestone level
+                if [ "$BRANCH_STRATEGY" = "single" ]; then
+                    log_info "Commits added to milestone branch (PR created at milestone end)"
+                    return 0
+                fi
 
                 # Still push and create PR
                 git push -u origin "$branch_name" 2>/dev/null || git push --force-with-lease origin "$branch_name"
@@ -615,8 +661,22 @@ execute_milestone() {
     local phases_failed=0
     local phases_skipped=0
 
-    # Track base branch for chaining - starts with main, then uses last branch from each phase
+    # Track base branch for chaining - strategy determines how this is used
     local current_base="main"
+    local milestone_branch=""
+
+    log_info "Branch strategy: ${BRANCH_STRATEGY}"
+
+    # For 'single' strategy, create one branch for all phases
+    if [ "$BRANCH_STRATEGY" = "single" ]; then
+        milestone_branch="milestone/${milestone}-$(date +%Y%m%d-%H%M%S)"
+        log_info "Creating single branch for all phases: ${milestone_branch}"
+        git fetch origin main 2>/dev/null || true
+        git checkout main 2>/dev/null || true
+        git pull origin main 2>/dev/null || true
+        git checkout -b "$milestone_branch"
+        current_base="$milestone_branch"
+    fi
 
     while IFS= read -r phase_num; do
         if [ -z "$phase_num" ]; then continue; fi
@@ -632,18 +692,34 @@ execute_milestone() {
         if [ -n "$phase_dir" ] && is_phase_complete "$phase_dir"; then
             log_info "Phase ${phase_num} already complete, skipping..."
             phases_skipped=$((phases_skipped + 1))
-            # Note: we don't update current_base here since we're skipping
-            # This means if phase 14 is complete but 15 isn't, 15 will start from main
-            # That's intentional - completed phases should already be merged to main
             continue
         fi
 
-        # Execute phase, passing the base branch from previous phase
-        if execute_phase "$phase_num" "$current_base"; then
+        # Determine base branch based on strategy
+        local phase_base="main"
+        case "$BRANCH_STRATEGY" in
+            independent)
+                # Each phase branches from main (clean, independent PRs)
+                phase_base="main"
+                ;;
+            chain)
+                # Each phase branches from previous (stacked PRs)
+                phase_base="$current_base"
+                ;;
+            single)
+                # All phases on same branch (single PR at end)
+                phase_base="$milestone_branch"
+                ;;
+        esac
+
+        # Execute phase with appropriate base
+        if execute_phase "$phase_num" "$phase_base"; then
             phases_completed=$((phases_completed + 1))
-            # Chain: next phase builds on the last branch from this phase
-            current_base="$LAST_BRANCH"
-            log_info "Next phase will branch from: ${current_base}"
+            # Only update current_base for chain strategy
+            if [ "$BRANCH_STRATEGY" = "chain" ]; then
+                current_base="$LAST_BRANCH"
+                log_info "Next phase will branch from: ${current_base}"
+            fi
         else
             local exit_code=$?
             if [ $exit_code -eq 2 ]; then
@@ -658,6 +734,23 @@ execute_milestone() {
             fi
         fi
     done <<< "$phases"
+
+    # For 'single' strategy, create PR at the end
+    if [ "$BRANCH_STRATEGY" = "single" ] && [ $phases_completed -gt 0 ]; then
+        log_info "Creating single PR for milestone ${milestone}..."
+        git push -u origin "$milestone_branch" 2>/dev/null || git push --force-with-lease origin "$milestone_branch"
+        local pr_title="Milestone ${milestone}: ${phases_completed} phases completed"
+        local pr_body="## Milestone ${milestone}
+
+Completed ${phases_completed} phases in a single PR.
+
+### Phases Included
+$(echo "$phases" | while read -r p; do [ -n "$p" ] && echo "- Phase $p"; done)
+
+---
+🤖 Generated with [gsd-phase-executor.sh](https://github.com/solidsystems/get-shit-done)"
+        GITHUB_TOKEN= gh pr create --title "$pr_title" --body "$pr_body" 2>/dev/null && log_success "PR created" || log_warn "PR creation failed or already exists"
+    fi
 
     echo ""
     log_info "═══════════════════════════════════════════════════════════"
