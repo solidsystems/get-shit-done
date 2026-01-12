@@ -168,6 +168,112 @@ extract_plan_number() {
     basename "$plan_file" | sed 's/-.*//' | sed 's/^[0-9]*-//'
 }
 
+# Extract objective from plan file
+extract_objective() {
+    local plan_file="$1"
+    sed -n '/<objective>/,/<\/objective>/p' "$plan_file" | grep -v '<objective>\|</objective>' | head -1 | sed 's/^[[:space:]]*//'
+}
+
+# Extract purpose from plan file (second line of objective block)
+extract_purpose() {
+    local plan_file="$1"
+    sed -n '/<objective>/,/<\/objective>/p' "$plan_file" | grep -E '^Purpose:' | sed 's/^Purpose:[[:space:]]*//'
+}
+
+# Extract task names from plan file
+extract_tasks() {
+    local plan_file="$1"
+    grep -E '<name>.*</name>' "$plan_file" | sed 's/.*<name>\(.*\)<\/name>.*/\1/' | sed 's/^[[:space:]]*//'
+}
+
+# Extract files modified from plan file
+extract_files() {
+    local plan_file="$1"
+    grep -E '<files>.*</files>' "$plan_file" | sed 's/.*<files>\(.*\)<\/files>.*/\1/' | tr ',' '\n' | sed 's/^[[:space:]]*//' | sort -u
+}
+
+# Extract verification checklist from plan file
+extract_verification() {
+    local plan_file="$1"
+    sed -n '/<verification>/,/<\/verification>/p' "$plan_file" | grep -E '^\s*-\s*\[' | sed 's/^[[:space:]]*//'
+}
+
+# Build detailed PR body from plan file
+build_pr_body() {
+    local plan_file="$1"
+    local phase_num="$2"
+    local plan_num="$3"
+    local base_branch="$4"
+
+    local objective=$(extract_objective "$plan_file")
+    local purpose=$(extract_purpose "$plan_file")
+    local tasks=$(extract_tasks "$plan_file")
+    local files=$(extract_files "$plan_file")
+    local verification=$(extract_verification "$plan_file")
+
+    local base_info=""
+    if [ "$base_branch" != "main" ] && [ -n "$base_branch" ]; then
+        base_info="
+> **Note:** This branch is based on \`${base_branch}\` (stacked changes).
+> Merge previous PRs first, then rebase this PR on main.
+"
+    fi
+
+    local task_list=""
+    if [ -n "$tasks" ]; then
+        task_list="## Tasks
+
+"
+        while IFS= read -r task; do
+            if [ -n "$task" ]; then
+                task_list="${task_list}- [x] ${task}
+"
+            fi
+        done <<< "$tasks"
+    fi
+
+    local file_list=""
+    if [ -n "$files" ]; then
+        file_list="## Files Modified
+
+"
+        while IFS= read -r file; do
+            if [ -n "$file" ]; then
+                file_list="${file_list}- \`${file}\`
+"
+            fi
+        done <<< "$files"
+    fi
+
+    local verify_list=""
+    if [ -n "$verification" ]; then
+        verify_list="## Verification
+
+"
+        while IFS= read -r item; do
+            if [ -n "$item" ]; then
+                # Convert [ ] to [x] since we completed these
+                item=$(echo "$item" | sed 's/\[ \]/[x]/')
+                verify_list="${verify_list}${item}
+"
+            fi
+        done <<< "$verification"
+    fi
+
+    cat << EOF
+## Summary
+
+${objective}
+${base_info}
+${purpose:+**Purpose:** ${purpose}
+
+}${task_list}${file_list}${verify_list}
+---
+📋 Plan: \`${plan_file}\`
+🤖 Generated with [gsd-phase-executor.sh](https://github.com/solidsystems/get-shit-done)
+EOF
+}
+
 # Find all phases in a milestone from ROADMAP.md
 # Returns phase numbers separated by newlines
 find_milestone_phases() {
@@ -336,27 +442,7 @@ execute_plan() {
 
             log_info "Creating PR..."
             local pr_title="Phase ${phase_num} Plan ${plan_num}: ${objective:0:50}"
-            local base_info=""
-            if [ "$base_branch" != "main" ]; then
-                base_info="
-**Note:** This branch is based on \`${base_branch}\` (stacked changes).
-Merge previous PRs first, then rebase this PR on main."
-            fi
-            local pr_body=$(cat << EOF
-## Summary
-
-Executed plan ${phase_num}-${plan_num}.
-
-## Plan
-\`${plan_file}\`
-
-## Objective
-${objective}
-${base_info}
----
-Generated with gsd-phase-executor.sh
-EOF
-)
+            local pr_body=$(build_pr_body "$plan_file" "$phase_num" "$plan_num" "$base_branch")
 
             GITHUB_TOKEN= gh pr create --title "$pr_title" --body "$pr_body" 2>/dev/null && log_success "PR created" || log_warn "PR creation failed or already exists"
 
@@ -373,7 +459,9 @@ EOF
 
                 # Still push and create PR
                 git push -u origin "$branch_name" 2>/dev/null || git push --force-with-lease origin "$branch_name"
-                GITHUB_TOKEN= gh pr create --title "Phase ${phase_num} Plan ${plan_num}" --body "Auto-generated" 2>/dev/null || true
+                local pr_title="Phase ${phase_num} Plan ${plan_num}: ${objective:0:50}"
+                local pr_body=$(build_pr_body "$plan_file" "$phase_num" "$plan_num" "$base_branch")
+                GITHUB_TOKEN= gh pr create --title "$pr_title" --body "$pr_body" 2>/dev/null || true
 
                 return 0
             fi
