@@ -219,42 +219,28 @@ Add the new milestone to the milestones list. Completed milestones show as links
 ```markdown
 ## Milestones
 
-- ✅ **v1.0 [Previous]** - [link to milestones/v1.0-ROADMAP.md] (Phases 1-9, shipped YYYY-MM-DD)
-- 🚧 **v[X.Y] [Name]** - Phases [N]-[M] (in progress)
+- ✅ [v1.0 Previous](milestones/v1.0-ROADMAP.md) (Phases 1-9) — SHIPPED YYYY-MM-DD
+- 🔄 [v[X.Y] [Name]](milestones/v[X.Y]-ROADMAP.md) (Phases [N]-[M]) — In Progress
 ```
 
-**2. Add full phase details:**
+**2. Add details expandable section (CRITICAL - must match existing pattern):**
 
-Write complete phase sections for all phases in this milestone. Each phase gets full details including goal, dependencies, research assessment, and plan placeholders.
+**IMPORTANT:** The ROADMAP.md uses HTML `<details>` tags for milestone summaries. Add the new milestone's details section to match the established pattern:
 
 ```markdown
-### 🚧 v[X.Y] [Name] (In Progress)
+<details>
+<summary>v[X.Y] [Name] (Phases [N]-[M]) — In Progress</summary>
 
-**Milestone Goal:** [One sentence describing what this milestone delivers]
+- [ ] **Phase [N]: [Name]** - [One-line goal]
+- [ ] **Phase [N+1]: [Name]** - [One-line goal]
+- [ ] **Phase [N+2]: [Name]** - [One-line goal]
 
-#### Phase [N]: [Name]
+**[count] phases total** | [Full details](milestones/v[X.Y]-ROADMAP.md)
 
-**Goal**: [What this phase delivers]
-**Depends on**: Phase [N-1] (or "Previous milestone complete")
-**Research**: [Likely/Unlikely] ([reason])
-**Research topics**: [If Likely, what to investigate]
-**Plans**: TBD
-
-Plans:
-- [ ] [N]-01: TBD (run /gsd:plan-phase [N] to break down)
-
-#### Phase [N+1]: [Name]
-
-**Goal**: [What this phase delivers]
-**Depends on**: Phase [N]
-**Research**: [Likely/Unlikely] ([reason])
-**Plans**: TBD
-
-Plans:
-- [ ] [N+1]-01: TBD
-
-[... continue for all phases in this milestone ...]
+</details>
 ```
+
+This expandable section goes AFTER the completed milestones' `</details>` tags and BEFORE the Progress table.
 
 **3. Update Progress table:**
 
@@ -265,6 +251,46 @@ Add rows for all new phases with milestone attribution.
 | ------------- | --------- | ----- | ----------- | --------- |
 | [N]. [Name]   | v[X.Y]    | 0/?   | Not started | -         |
 | [N+1]. [Name] | v[X.Y]    | 0/?   | Not started | -         |
+```
+
+**4. Create milestone detail file:**
+
+Create `milestones/v[X.Y]-ROADMAP.md` with full phase details:
+
+```markdown
+# v[X.Y] [Name]
+
+**Started:** YYYY-MM-DD
+**Status:** In Progress
+
+## Overview
+
+[Brief description of milestone focus]
+
+## Phases
+
+### Phase [N]: [Name]
+**Goal:** [What this phase delivers]
+**Research:** [Yes/No]
+**Details:**
+- [Key detail 1]
+- [Key detail 2]
+
+### Phase [N+1]: [Name]
+**Goal:** [What this phase delivers]
+**Research:** [Yes/No]
+**Details:**
+- [Key detail 1]
+
+## Progress
+
+| Phase | Plans | Status |
+|-------|-------|--------|
+| [N]. [Name] | 0 | Not Started |
+| [N+1]. [Name] | 0 | Not Started |
+
+---
+*Created: YYYY-MM-DD*
 ```
 
 </step>
@@ -327,6 +353,7 @@ Commit milestone creation:
 
 ```bash
 git add .planning/ROADMAP.md .planning/STATE.md
+git add .planning/milestones/v[X.Y]-ROADMAP.md
 git add .planning/phases/
 git commit -m "$(cat <<'EOF'
 docs: create milestone v[X.Y] [Name] ([N] phases)
@@ -407,10 +434,13 @@ Milestone creation is complete when:
 - [ ] Next phase number calculated correctly (continues from previous)
 - [ ] Phases defined per depth setting (quick: 3-5, standard: 5-8, comprehensive: 8-12)
 - [ ] Research flags assigned for each phase
-- [ ] ROADMAP.md updated with new milestone section
+- [ ] ROADMAP.md Milestones section updated with milestone link
+- [ ] ROADMAP.md `<details>` expandable section added (matching existing pattern)
+- [ ] ROADMAP.md Progress table updated with new phase rows
+- [ ] milestones/v[X.Y]-ROADMAP.md created with full phase details
 - [ ] Phase directories created
 - [ ] STATE.md reset for new milestone
-- [ ] Git commit made
+- [ ] Git commit made (includes milestone file)
 - [ ] User knows next steps
 </success_criteria>
 ```
